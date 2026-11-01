@@ -23,3 +23,13 @@ The public API is synchronous and returns `Result` with the non-exhaustive Praxi
 Keep source layered as API, use cases, domain, and private storage. SQLite belongs only in the private adapter. Use public API contract tests against temporary SQLite databases as the primary behavior seam.
 
 Keep modules focused and cohesive; split files when their responsibilities stop fitting together.
+
+## graphify
+
+This project maintains a knowledge graph at `graphify-out/` capturing architecture, god nodes, community structure, and cross-file relationships.
+
+**Agents MUST read and follow the `graphify` skill (`skills/graphify/SKILL.md`)** for codebase navigation and graph maintenance:
+- **Codebase Exploration & Questions**: Whenever answering any user question about the codebase (architecture, how components work, data flow, call paths, or dependencies), read the `graphify` skill first. When `graphify-out/graph.json` exists, turn the user's inquiry into a targeted question and run `graphify query "<question>"` before performing any grep, search, or raw source file browsing. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. Read raw source files only for lines identified by the graph. Include this rule in every subagent prompt that explores code.
+- **After Modifying Code**: After creating or modifying source files, always run `graphify update .` (AST-only, fast, zero API cost) to keep the knowledge graph synchronized with codebase changes.
+- **Slash Command**: When the user invokes `/graphify`, strictly follow the instructions in the `graphify` skill before taking any other action.
+- **Working Tree State**: Files in `graphify-out/` are expected to change after incremental updates. Never skip using graphify because files in `graphify-out/` are dirty, and do not treat `graphify-out/graph.json` diffs as churn.
