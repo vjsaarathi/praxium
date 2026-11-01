@@ -251,6 +251,13 @@ fn test_store_is_backend_agnostic() {
             Ok(None)
         }
 
+        fn get_all_objects(
+            &self,
+            _col: &CollectionName,
+        ) -> Result<Vec<praxium::StoredObject>, Error> {
+            Ok(vec![])
+        }
+
         fn update_object(
             &self,
             _obj: &praxium::StoredObject,

@@ -81,6 +81,12 @@ pub trait StorageEngine: Send + Sync + std::fmt::Debug {
         id: &ObjectId,
     ) -> Result<Option<StoredObject>, Error>;
 
+    /// Retrieves all active (non-deleted) stored objects in the specified collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    fn get_all_objects(&self, collection: &CollectionName) -> Result<Vec<StoredObject>, Error>;
+
     /// Updates an existing stored object guarded by the expected current revision.
     ///
     /// # Errors

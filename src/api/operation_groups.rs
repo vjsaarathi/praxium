@@ -336,8 +336,44 @@ impl ObjectsOp {
 /// Operations for generic filtering, sorting, and pagination.
 #[derive(Clone, Debug)]
 pub struct QueryOp {
-    #[allow(dead_code)]
     pub(crate) storage: Arc<dyn StorageEngine>,
+}
+
+impl QueryOp {
+    /// Executes a filter query against a collection, returning all matching Stored Objects.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection does not exist.
+    /// - Returns [`Error::Query`] if a regex pattern is invalid (validated pre-evaluation)
+    ///   or if an incompatible stored value type is encountered during evaluation.
+    pub fn execute(
+        &self,
+        collection: &CollectionName,
+        filter: &crate::domain::query::Filter,
+    ) -> Result<Vec<StoredObject>, Error> {
+        // Pre-evaluation validation (e.g. invalid regex rejection and operand check)
+        filter.validate(Some(collection))?;
+
+        // Ensure collection exists
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "execute_query",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        let objects = self.storage.get_all_objects(collection)?;
+        let mut matches = Vec::new();
+
+        for object in objects {
+            if filter.matches(collection, &object)? {
+                matches.push(object);
+            }
+        }
+
+        Ok(matches)
+    }
 }
 
 /// Operations for reading change history entries and revisions.

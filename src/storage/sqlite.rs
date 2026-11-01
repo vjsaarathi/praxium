@@ -3,6 +3,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -818,6 +819,87 @@ impl StorageEngine for SqliteStorage {
             }
             None => Ok(None),
         }
+    }
+
+    fn get_all_objects(&self, collection: &CollectionName) -> Result<Vec<StoredObject>, Error> {
+        if !self.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "get_all_objects",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, revision, data, created_at, updated_at, deleted_at
+                 FROM objects WHERE collection_name = ?1 AND deleted_at IS NULL
+                 ORDER BY id ASC",
+            )
+            .map_err(|e| {
+                Error::storage(
+                    "SqliteStorage::get_all_objects",
+                    "prepare failed",
+                    Some(Box::new(e)),
+                )
+            })?;
+
+        let rows = stmt
+            .query_map(params![collection.as_str()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(|e| {
+                Error::storage(
+                    "SqliteStorage::get_all_objects",
+                    "query failed",
+                    Some(Box::new(e)),
+                )
+            })?;
+
+        let mut objects = Vec::new();
+        for row in rows {
+            let (id_str, rev, data_str, created_str, updated_str, deleted_str) =
+                row.map_err(|e| {
+                    Error::storage(
+                        "SqliteStorage::get_all_objects",
+                        "row map failed",
+                        Some(Box::new(e)),
+                    )
+                })?;
+            let id = ObjectId::from_str(&id_str)?;
+            let value = serde_json::from_str(&data_str).map_err(|e| {
+                Error::storage(
+                    "SqliteStorage::get_all_objects",
+                    "corrupted object JSON in storage",
+                    Some(Box::new(e)),
+                )
+            })?;
+            let created_at = rfc3339_to_system_time(&created_str)?;
+            let updated_at = rfc3339_to_system_time(&updated_str)?;
+            let deleted_at = match deleted_str {
+                Some(s) => Some(rfc3339_to_system_time(&s)?),
+                None => None,
+            };
+            objects.push(StoredObject {
+                collection: collection.clone(),
+                id,
+                revision: ObjectRevision::new(rev)?,
+                value,
+                created_at,
+                updated_at,
+                deleted_at,
+            });
+        }
+
+        Ok(objects)
     }
 
     fn update_object(

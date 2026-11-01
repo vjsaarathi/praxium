@@ -190,6 +190,27 @@ impl Error {
     pub fn validation(operation: &'static str, report: ValidationReport) -> Self {
         Self::Validation { operation, report }
     }
+
+    /// Helper to construct an [`Error::Query`].
+    pub fn query(
+        operation: &'static str,
+        collection: Option<String>,
+        object_id: Option<String>,
+        pointer: Option<String>,
+        operator: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Query {
+            operation,
+            details: Box::new(QueryErrorDetails {
+                collection,
+                object_id,
+                pointer,
+                operator,
+                message: message.into(),
+            }),
+        }
+    }
 }
 
 /// A structured report of schema validation issues.
