@@ -169,26 +169,53 @@ fn test_schema_validate_without_write() {
 fn test_store_is_backend_agnostic() {
     use praxium::domain::manifest::{InitializationManifest, InitializationReport};
     use praxium::domain::types::CollectionName;
-    use praxium::{StorageEngine, StorageTransaction};
+    use praxium::StorageEngine;
 
     #[derive(Debug)]
     struct MockStorage;
 
-    struct MockTx;
-    impl StorageTransaction for MockTx {
-        fn list_collections(&mut self) -> Result<Vec<CollectionName>, Error> {
+    impl StorageEngine for MockStorage {
+        fn create_collection(&self, _name: &CollectionName) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn get_collection(&self, name: &CollectionName) -> Result<Option<praxium::CollectionMetadata>, Error> {
+            if name.as_str() == "mock_collection" {
+                Ok(Some(praxium::CollectionMetadata {
+                    name: name.clone(),
+                    created_at: std::time::SystemTime::UNIX_EPOCH,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn collection_exists(&self, name: &CollectionName) -> Result<bool, Error> {
+            Ok(name.as_str() == "mock_collection")
+        }
+
+        fn list_collections(&self) -> Result<Vec<CollectionName>, Error> {
             Ok(vec![CollectionName::new("mock_collection").unwrap()])
         }
-    }
 
-    impl StorageEngine for MockStorage {
+        fn get_active_schema(&self, _col: &CollectionName) -> Result<Option<praxium::SchemaSnapshot>, Error> {
+            Ok(None)
+        }
+
+        fn get_schema_version(&self, _col: &CollectionName, _ver: praxium::SchemaVersion) -> Result<Option<praxium::SchemaSnapshot>, Error> {
+            Ok(None)
+        }
+
+        fn list_schema_versions(&self, _col: &CollectionName) -> Result<Vec<praxium::SchemaVersion>, Error> {
+            Ok(vec![])
+        }
+
         fn seed_manifest(&self, _manifest: &InitializationManifest) -> Result<InitializationReport, Error> {
             Ok(InitializationReport::default())
         }
 
-        fn run_transaction(&self, f: &mut dyn FnMut(&mut dyn StorageTransaction) -> Result<(), Error>) -> Result<(), Error> {
-            let mut tx = MockTx;
-            f(&mut tx)
+        fn run_transaction(&self, f: &mut dyn FnMut() -> Result<(), Error>) -> Result<(), Error> {
+            f()
         }
     }
 

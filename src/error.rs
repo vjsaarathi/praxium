@@ -160,6 +160,23 @@ impl Error {
             id,
         }
     }
+
+    /// Helper to construct an [`Error::Conflict`].
+    pub fn conflict(
+        operation: &'static str,
+        entity: &'static str,
+        expected: Option<String>,
+        current: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Conflict {
+            operation,
+            entity,
+            expected,
+            current,
+            message: message.into(),
+        }
+    }
 }
 
 /// A structured report of schema validation issues.

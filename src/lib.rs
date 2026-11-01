@@ -18,10 +18,11 @@ pub use domain::manifest::{
     CollectionDefinition, IndexDefinition, InitializationManifest, InitializationReport,
 };
 pub use domain::types::{
-    CollectionName, IndexVersion, JsonPointer, ObjectId, ObjectRevision, SchemaVersion,
+    CollectionMetadata, CollectionName, IndexVersion, JsonPointer, ObjectId, ObjectRevision,
+    SchemaSnapshot, SchemaVersion,
 };
 pub use error::{Error, ValidationIssue, ValidationReport};
-pub use storage::{SqliteStorage, StorageEngine, StorageTransaction};
+pub use storage::{SqliteStorage, StorageEngine};
 
 /// Praxium Result type alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;

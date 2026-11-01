@@ -7,9 +7,9 @@ use std::time::SystemTime;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::manifest::{InitializationManifest, InitializationReport};
-use crate::domain::types::{CollectionName, IndexVersion, JsonPointer, SchemaVersion};
+use crate::domain::types::{CollectionMetadata, CollectionName, IndexVersion, JsonPointer, SchemaSnapshot, SchemaVersion};
 use crate::error::Error;
-use crate::storage::{StorageEngine, StorageTransaction};
+use crate::storage::StorageEngine;
 
 /// Current internal storage schema version for Praxium.
 pub const CURRENT_STORAGE_VERSION: u32 = 1;
@@ -38,6 +38,51 @@ pub fn system_time_to_rfc3339(time: SystemTime) -> String {
     let y = if m <= 2 { y + 1 } else { y };
 
     format!("{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Parses an RFC 3339 UTC string into a [`SystemTime`].
+///
+/// Uses civil calendar day calculations to convert calendar dates into UNIX seconds.
+pub fn rfc3339_to_system_time(timestamp_str: &str) -> Result<SystemTime, Error> {
+    let err = || {
+        Error::invalid_input(
+            "parse_rfc3339",
+            "timestamp",
+            format!("invalid RFC 3339 timestamp: {timestamp_str}"),
+        )
+    };
+    if timestamp_str.len() < 20 || !timestamp_str.ends_with('Z') {
+        return Err(err());
+    }
+    let parts: Vec<&str> = timestamp_str[..timestamp_str.len() - 1].split('T').collect();
+    if parts.len() != 2 {
+        return Err(err());
+    }
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    let time_parts: Vec<&str> = parts[1].split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return Err(err());
+    }
+    let year: i64 = date_parts[0].parse().map_err(|_| err())?;
+    let month: i64 = date_parts[1].parse().map_err(|_| err())?;
+    let day: i64 = date_parts[2].parse().map_err(|_| err())?;
+    let hour: u64 = time_parts[0].parse().map_err(|_| err())?;
+    let minute: u64 = time_parts[1].parse().map_err(|_| err())?;
+    let second: u64 = time_parts[2].parse().map_err(|_| err())?;
+
+    // Civil calendar conversion (Howard Hinnant algorithm)
+    let adjusted_year = if month <= 2 { year - 1 } else { year };
+    let era_index = (if adjusted_year >= 0 { adjusted_year } else { adjusted_year - 399 }) / 400;
+    let year_of_era = (adjusted_year - era_index * 400) as u64;
+    let month_offset = if month > 2 { month - 3 } else { month + 9 } as u64;
+    let day_of_year = (153 * month_offset + 2) / 5 + (day as u64) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days_since_unix_epoch = (era_index * 146097) + (day_of_era as i64) - 719468;
+    if days_since_unix_epoch < 0 {
+        return Err(err());
+    }
+    let total_seconds = (days_since_unix_epoch as u64) * 86400 + hour * 3600 + minute * 60 + second;
+    Ok(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(total_seconds))
 }
 
 /// Storage representation of an existing collection definition.
@@ -264,38 +309,186 @@ impl SqliteStorage {
             None => Ok(None),
         }
     }
+    fn ensure_collection_exists(&self, collection: &CollectionName, op: &'static str) -> Result<(), Error> {
+        if !self.collection_exists(collection)? {
+            return Err(Error::not_found(
+                op,
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+        Ok(())
+    }
+
+    fn parse_schema_snapshot(ver: u32, json_str: &str, created_str: &str, op: &'static str) -> Result<SchemaSnapshot, Error> {
+        let schema = serde_json::from_str(json_str).map_err(|e| {
+            Error::storage(op, "corrupted schema json in storage", Some(Box::new(e)))
+        })?;
+        let created_at = rfc3339_to_system_time(created_str)?;
+        Ok(SchemaSnapshot {
+            version: SchemaVersion::new(ver)?,
+            schema,
+            created_at,
+        })
+    }
 }
 
-/// SQLite transactional storage handle implementing [`StorageTransaction`].
-pub struct SqliteTransaction<'a> {
-    tx: rusqlite::Transaction<'a>,
-}
+impl StorageEngine for SqliteStorage {
+    fn create_collection(&self, name: &CollectionName) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = system_time_to_rfc3339(SystemTime::now());
+        let res = conn.execute(
+            "INSERT INTO collections (name, created_at) VALUES (?1, ?2)",
+            params![name.as_str(), &now],
+        );
+        match res {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(Error::conflict(
+                    "create_collection",
+                    "collection",
+                    Some("unique collection".to_string()),
+                    Some(name.as_str().to_string()),
+                    format!("collection '{}' already exists", name.as_str()),
+                ))
+            }
+            Err(e) => Err(Error::storage(
+                "SqliteStorage::create_collection",
+                "insert collection failed",
+                Some(Box::new(e)),
+            )),
+        }
+    }
 
-impl<'a> StorageTransaction for SqliteTransaction<'a> {
-    fn list_collections(&mut self) -> Result<Vec<CollectionName>, Error> {
-        let mut stmt = self.tx.prepare("SELECT name FROM collections ORDER BY name ASC").map_err(|e| {
-            Error::storage("SqliteTransaction::list_collections", "prepare failed", Some(Box::new(e)))
+    fn get_collection(&self, name: &CollectionName) -> Result<Option<CollectionMetadata>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT created_at FROM collections WHERE name = ?1").map_err(|e| {
+            Error::storage("SqliteStorage::get_collection", "prepare failed", Some(Box::new(e)))
+        })?;
+        let row = stmt.query_row(params![name.as_str()], |r| r.get::<_, String>(0)).optional().map_err(|e| {
+            Error::storage("SqliteStorage::get_collection", "query failed", Some(Box::new(e)))
+        })?;
+        match row {
+            Some(created_str) => {
+                let created_at = rfc3339_to_system_time(&created_str)?;
+                Ok(Some(CollectionMetadata {
+                    name: name.clone(),
+                    created_at,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn collection_exists(&self, name: &CollectionName) -> Result<bool, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT 1 FROM collections WHERE name = ?1").map_err(|e| {
+            Error::storage("SqliteStorage::collection_exists", "prepare failed", Some(Box::new(e)))
+        })?;
+        let exists = stmt.exists(params![name.as_str()]).map_err(|e| {
+            Error::storage("SqliteStorage::collection_exists", "query failed", Some(Box::new(e)))
+        })?;
+        Ok(exists)
+    }
+
+    fn list_collections(&self) -> Result<Vec<CollectionName>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name FROM collections ORDER BY name ASC").map_err(|e| {
+            Error::storage("SqliteStorage::list_collections", "prepare failed", Some(Box::new(e)))
         })?;
 
         let rows = stmt.query_map([], |row| {
             let name_str: String = row.get(0)?;
             Ok(name_str)
         }).map_err(|e| {
-            Error::storage("SqliteTransaction::list_collections", "query failed", Some(Box::new(e)))
+            Error::storage("SqliteStorage::list_collections", "query failed", Some(Box::new(e)))
         })?;
 
         let mut names = Vec::new();
         for r in rows {
             let name_str = r.map_err(|e| {
-                Error::storage("SqliteTransaction::list_collections", "row error", Some(Box::new(e)))
+                Error::storage("SqliteStorage::list_collections", "row error", Some(Box::new(e)))
             })?;
             names.push(CollectionName::new(name_str)?);
         }
         Ok(names)
     }
-}
 
-impl StorageEngine for SqliteStorage {
+    fn get_active_schema(&self, collection: &CollectionName) -> Result<Option<SchemaSnapshot>, Error> {
+        self.ensure_collection_exists(collection, "get_active_schema")?;
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT version, schema_json, created_at FROM schemas WHERE collection_name = ?1 AND is_active = 1",
+        ).map_err(|e| {
+            Error::storage("SqliteStorage::get_active_schema", "prepare failed", Some(Box::new(e)))
+        })?;
+
+        let row = stmt.query_row(params![collection.as_str()], |r| {
+            Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        }).optional().map_err(|e| {
+            Error::storage("SqliteStorage::get_active_schema", "query failed", Some(Box::new(e)))
+        })?;
+
+        match row {
+            Some((ver, json_str, created_str)) => {
+                let snapshot = Self::parse_schema_snapshot(ver, &json_str, &created_str, "SqliteStorage::get_active_schema")?;
+                Ok(Some(snapshot))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn get_schema_version(&self, collection: &CollectionName, version: SchemaVersion) -> Result<Option<SchemaSnapshot>, Error> {
+        self.ensure_collection_exists(collection, "get_schema_version")?;
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT version, schema_json, created_at FROM schemas WHERE collection_name = ?1 AND version = ?2",
+        ).map_err(|e| {
+            Error::storage("SqliteStorage::get_schema_version", "prepare failed", Some(Box::new(e)))
+        })?;
+
+        let row = stmt.query_row(params![collection.as_str(), version.get()], |r| {
+            Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        }).optional().map_err(|e| {
+            Error::storage("SqliteStorage::get_schema_version", "query failed", Some(Box::new(e)))
+        })?;
+
+        match row {
+            Some((ver, json_str, created_str)) => {
+                let snapshot = Self::parse_schema_snapshot(ver, &json_str, &created_str, "SqliteStorage::get_schema_version")?;
+                Ok(Some(snapshot))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn list_schema_versions(&self, collection: &CollectionName) -> Result<Vec<SchemaVersion>, Error> {
+        self.ensure_collection_exists(collection, "list_schema_versions")?;
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT version FROM schemas WHERE collection_name = ?1 ORDER BY version ASC",
+        ).map_err(|e| {
+            Error::storage("SqliteStorage::list_schema_versions", "prepare failed", Some(Box::new(e)))
+        })?;
+
+        let rows = stmt.query_map(params![collection.as_str()], |r| r.get::<_, u32>(0)).map_err(|e| {
+            Error::storage("SqliteStorage::list_schema_versions", "query failed", Some(Box::new(e)))
+        })?;
+
+        let mut versions = Vec::new();
+        for r in rows {
+            let ver_u32 = r.map_err(|e| {
+                Error::storage("SqliteStorage::list_schema_versions", "row error", Some(Box::new(e)))
+            })?;
+            versions.push(SchemaVersion::new(ver_u32)?);
+        }
+        Ok(versions)
+    }
 
     fn seed_manifest(&self, manifest: &InitializationManifest) -> Result<InitializationReport, Error> {
         let mut conn = self.conn.lock().unwrap();
@@ -422,19 +615,17 @@ impl StorageEngine for SqliteStorage {
         })
     }
 
-    fn run_transaction(&self, f: &mut dyn FnMut(&mut dyn StorageTransaction) -> Result<(), Error>) -> Result<(), Error> {
+    fn run_transaction(&self, f: &mut dyn FnMut() -> Result<(), Error>) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().map_err(|e| {
             Error::transaction("SqliteStorage::run_transaction", "failed to start transaction", Some(Box::new(e)))
         })?;
 
-        let mut sqlite_tx = SqliteTransaction { tx };
+        // If f() returns Err, tx drops and rolls back.
+        // If f() panics, stack unwinding drops tx and rolls back; panic propagates unchanged.
+        f()?;
 
-        // If f() returns Err, sqlite_tx.tx drops and rolls back.
-        // If f() panics, stack unwinding drops sqlite_tx.tx and rolls back; panic propagates unchanged.
-        f(&mut sqlite_tx)?;
-
-        sqlite_tx.tx.commit().map_err(|e| {
+        tx.commit().map_err(|e| {
             Error::transaction("SqliteStorage::run_transaction", "failed to commit transaction", Some(Box::new(e)))
         })?;
 

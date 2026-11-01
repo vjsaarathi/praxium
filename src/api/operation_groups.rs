@@ -1,7 +1,7 @@
 //! Focused operation groups exposed by the ObjectStore handle.
 
 use std::sync::Arc;
-use crate::domain::types::CollectionName;
+use crate::domain::types::{CollectionMetadata, CollectionName, SchemaSnapshot, SchemaVersion};
 use crate::error::Error;
 use crate::storage::StorageEngine;
 
@@ -12,14 +12,28 @@ pub struct CollectionsOp {
 }
 
 impl CollectionsOp {
+    /// Creates a new named collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::Conflict`] if a collection with this name already exists.
+    pub fn create(&self, name: &CollectionName) -> Result<(), Error> {
+        self.storage.create_collection(name)
+    }
+
+    /// Looks up metadata for an existing named collection.
+    /// Returns `Ok(None)` if no collection with the specified name exists.
+    pub fn get(&self, name: &CollectionName) -> Result<Option<CollectionMetadata>, Error> {
+        self.storage.get_collection(name)
+    }
+
+    /// Checks if a collection with the given name exists.
+    pub fn exists(&self, name: &CollectionName) -> Result<bool, Error> {
+        self.storage.collection_exists(name)
+    }
+
     /// Lists all existing collection names in ascending order.
     pub fn list(&self) -> Result<Vec<CollectionName>, Error> {
-        let mut collections = Vec::new();
-        self.storage.run_transaction(&mut |tx| {
-            collections = tx.list_collections()?;
-            Ok(())
-        })?;
-        Ok(collections)
+        self.storage.list_collections()
     }
 }
 
@@ -31,6 +45,51 @@ pub struct SchemasOp {
 }
 
 impl SchemasOp {
+    /// Retrieves the active schema for the specified collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    pub fn get_active(&self, collection: &CollectionName) -> Result<Option<SchemaSnapshot>, Error> {
+        self.storage.get_active_schema(collection)
+    }
+
+    /// Retrieves a specific retained schema version for the specified collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    pub fn get_version(
+        &self,
+        collection: &CollectionName,
+        version: SchemaVersion,
+    ) -> Result<Option<SchemaSnapshot>, Error> {
+        self.storage.get_schema_version(collection, version)
+    }
+
+    /// Lists all retained schema versions for the specified collection in ascending order.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    pub fn list_versions(&self, collection: &CollectionName) -> Result<Vec<SchemaVersion>, Error> {
+        self.storage.list_schema_versions(collection)
+    }
+
+    /// Validates a proposed collection schema against the Draft 2020-12 specification
+    /// and checks that the targeted collection exists.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection does not exist.
+    /// - Returns [`Error::InvalidInput`] if the schema dialect is unsupported or invalid.
+    pub fn validate_proposed(&self, collection: &CollectionName, schema: &serde_json::Value) -> Result<(), Error> {
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "validate_proposed",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+        self.validate(schema)
+    }
+
     /// Validates a proposed collection schema against the Draft 2020-12 specification
     /// without writing it to storage.
     ///
@@ -82,7 +141,7 @@ impl TransactionsOp {
         let mut opt_f = Some(f);
         let mut result = None;
 
-        let mut runner = |_tx: &mut dyn crate::storage::StorageTransaction| {
+        let mut runner = || {
             let func = opt_f.take().expect("transaction closure invoked once");
             match func() {
                 Ok(val) => {

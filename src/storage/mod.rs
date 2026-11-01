@@ -11,14 +11,8 @@ pub mod sqlite;
 pub use sqlite::SqliteStorage;
 
 use crate::domain::manifest::{InitializationManifest, InitializationReport};
-use crate::domain::types::CollectionName;
+use crate::domain::types::{CollectionMetadata, CollectionName, SchemaSnapshot, SchemaVersion};
 use crate::error::Error;
-
-/// Transactional storage operations handle passed to transactional callbacks.
-pub trait StorageTransaction {
-    /// Lists all existing collection names in ascending order.
-    fn list_collections(&mut self) -> Result<Vec<CollectionName>, Error>;
-}
 
 /// Storage port defining backend-agnostic persistence capabilities.
 ///
@@ -26,13 +20,45 @@ pub trait StorageTransaction {
 /// The public [`ObjectStore`](crate::ObjectStore) handle interacts solely through this abstraction,
 /// ensuring that Praxium is never coupled to a single backend.
 pub trait StorageEngine: Send + Sync + std::fmt::Debug {
+    /// Creates a new collection in storage.
+    ///
+    /// # Errors
+    /// Returns [`Error::Conflict`] if a collection with this name already exists.
+    fn create_collection(&self, name: &CollectionName) -> Result<(), Error>;
+
+    /// Looks up metadata for an existing named collection.
+    /// Returns `Ok(None)` if the collection does not exist.
+    fn get_collection(&self, name: &CollectionName) -> Result<Option<CollectionMetadata>, Error>;
+
+    /// Checks whether a collection with the given name exists in storage.
+    fn collection_exists(&self, name: &CollectionName) -> Result<bool, Error>;
+
+    /// Lists all existing collection names in ascending order.
+    fn list_collections(&self) -> Result<Vec<CollectionName>, Error>;
+
+    /// Retrieves the currently active schema snapshot for the specified collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    fn get_active_schema(&self, collection: &CollectionName) -> Result<Option<SchemaSnapshot>, Error>;
+
+    /// Retrieves a specific immutable schema version snapshot for the collection.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    fn get_schema_version(&self, collection: &CollectionName, version: SchemaVersion) -> Result<Option<SchemaSnapshot>, Error>;
+
+    /// Lists all retained schema versions for the collection in ascending order.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] if the collection does not exist.
+    fn list_schema_versions(&self, collection: &CollectionName) -> Result<Vec<SchemaVersion>, Error>;
+
     /// Atomically seeds missing collections, schemas, and indexes from the manifest.
     fn seed_manifest(&self, manifest: &InitializationManifest) -> Result<InitializationReport, Error>;
 
     /// Runs a transactional unit of work atomically.
     ///
-    /// The closure receives a [`StorageTransaction`] handle to execute operations
-    /// within the atomic transaction.
     /// Rolls back on [`Err`] and unwinds safely on panic without catching.
-    fn run_transaction(&self, f: &mut dyn FnMut(&mut dyn StorageTransaction) -> Result<(), Error>) -> Result<(), Error>;
+    fn run_transaction(&self, f: &mut dyn FnMut() -> Result<(), Error>) -> Result<(), Error>;
 }

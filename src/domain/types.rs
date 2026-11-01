@@ -6,6 +6,7 @@
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
+use std::time::SystemTime;
 use uuid::Uuid;
 
 use crate::error::Error;
@@ -363,3 +364,24 @@ impl From<JsonPointer> for String {
         ptr.0
     }
 }
+
+/// Stored definition metadata for an existing named collection.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CollectionMetadata {
+    /// Name of the collection.
+    pub name: CollectionName,
+    /// Creation timestamp of this collection.
+    pub created_at: SystemTime,
+}
+
+/// A retained or active immutable snapshot of a collection's JSON schema.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaSnapshot {
+    /// Monotonically increasing schema version.
+    pub version: SchemaVersion,
+    /// JSON Schema Draft 2020-12 specification value.
+    pub schema: serde_json::Value,
+    /// Creation timestamp of this schema version.
+    pub created_at: SystemTime,
+}
+
