@@ -7,6 +7,7 @@
 .agents/
 .gemini/
 .claude/
+graphify-out/
 
 # Cloud credentials, local secrets & environment files
 .aws/
