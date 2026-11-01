@@ -19,7 +19,7 @@ pub use domain::manifest::{
 };
 pub use domain::types::{
     CollectionMetadata, CollectionName, IndexVersion, JsonPointer, ObjectId, ObjectRevision,
-    SchemaSnapshot, SchemaVersion,
+    SchemaSnapshot, SchemaVersion, StoredObject,
 };
 pub use error::{Error, ValidationIssue, ValidationReport};
 pub use storage::{SqliteStorage, StorageEngine};

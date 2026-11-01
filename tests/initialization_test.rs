@@ -1,6 +1,4 @@
-use praxium::domain::manifest::{
-    CollectionDefinition, IndexDefinition, InitializationManifest,
-};
+use praxium::domain::manifest::{CollectionDefinition, IndexDefinition, InitializationManifest};
 use praxium::domain::types::{CollectionName, IndexVersion, JsonPointer, SchemaVersion};
 use praxium::{Error, ObjectStore, SqliteStorage};
 use serde_json::json;
@@ -29,23 +27,34 @@ fn test_initialization_seeds_missing_definitions_atomically() {
                 .with_schema(task_schema)
                 .add_index(IndexDefinition::new(JsonPointer::new("/priority").unwrap())),
         )
-        .add_collection(
-            CollectionDefinition::new(CollectionName::new("projects").unwrap())
-        )
+        .add_collection(CollectionDefinition::new(
+            CollectionName::new("projects").unwrap(),
+        ))
         .build();
 
     let report = store.initialize(&manifest).expect("initialize succeeds");
 
     // Check report
     assert_eq!(report.seeded_collections.len(), 2);
-    assert!(report.seeded_collections.contains(&CollectionName::new("tasks").unwrap()));
-    assert!(report.seeded_collections.contains(&CollectionName::new("projects").unwrap()));
+    assert!(
+        report
+            .seeded_collections
+            .contains(&CollectionName::new("tasks").unwrap())
+    );
+    assert!(
+        report
+            .seeded_collections
+            .contains(&CollectionName::new("projects").unwrap())
+    );
     assert!(report.preserved_collections.is_empty());
 
     assert_eq!(report.seeded_schemas.len(), 1);
     assert_eq!(
         report.seeded_schemas[0],
-        (CollectionName::new("tasks").unwrap(), SchemaVersion::INITIAL)
+        (
+            CollectionName::new("tasks").unwrap(),
+            SchemaVersion::INITIAL
+        )
     );
     assert!(report.preserved_schemas.is_empty());
 
@@ -95,13 +104,19 @@ fn test_initialization_idempotency_and_preservation() {
     let report2 = store.initialize(&manifest).expect("second initialize");
     assert!(report2.seeded_collections.is_empty());
     assert_eq!(report2.preserved_collections.len(), 1);
-    assert_eq!(report2.preserved_collections[0], CollectionName::new("items").unwrap());
+    assert_eq!(
+        report2.preserved_collections[0],
+        CollectionName::new("items").unwrap()
+    );
 
     assert!(report2.seeded_schemas.is_empty());
     assert_eq!(report2.preserved_schemas.len(), 1);
     assert_eq!(
         report2.preserved_schemas[0],
-        (CollectionName::new("items").unwrap(), SchemaVersion::INITIAL)
+        (
+            CollectionName::new("items").unwrap(),
+            SchemaVersion::INITIAL
+        )
     );
 
     assert!(report2.seeded_indexes.is_empty());
@@ -140,21 +155,38 @@ fn test_initialization_preserves_unmanifested_existing_definitions() {
 
     // manifest2 only defines second_col, omitting first_col
     let manifest2 = InitializationManifest::builder()
-        .add_collection(
-            CollectionDefinition::new(CollectionName::new("second_col").unwrap())
-        )
+        .add_collection(CollectionDefinition::new(
+            CollectionName::new("second_col").unwrap(),
+        ))
         .build();
 
     let report2 = store.initialize(&manifest2).expect("manifest2 initialize");
 
     // second_col is seeded
-    assert_eq!(report2.seeded_collections, vec![CollectionName::new("second_col").unwrap()]);
+    assert_eq!(
+        report2.seeded_collections,
+        vec![CollectionName::new("second_col").unwrap()]
+    );
     // first_col is reported in preserved_collections even though omitted from manifest2!
-    assert!(report2.preserved_collections.contains(&CollectionName::new("first_col").unwrap()));
+    assert!(
+        report2
+            .preserved_collections
+            .contains(&CollectionName::new("first_col").unwrap())
+    );
     // first_col's schema is reported in preserved_schemas!
-    assert!(report2.preserved_schemas.iter().any(|(c, _)| c.as_str() == "first_col"));
+    assert!(
+        report2
+            .preserved_schemas
+            .iter()
+            .any(|(c, _)| c.as_str() == "first_col")
+    );
     // first_col's index is reported in preserved_indexes!
-    assert!(report2.preserved_indexes.iter().any(|(c, p, _)| c.as_str() == "first_col" && p.as_str() == "/field"));
+    assert!(
+        report2
+            .preserved_indexes
+            .iter()
+            .any(|(c, p, _)| c.as_str() == "first_col" && p.as_str() == "/field")
+    );
 }
 
 #[test]
@@ -171,16 +203,18 @@ fn test_initialization_atomic_rollback_on_invalid_schema() {
     });
 
     let manifest = InitializationManifest::builder()
-        .add_collection(
-            CollectionDefinition::new(CollectionName::new("valid_col").unwrap())
-        )
+        .add_collection(CollectionDefinition::new(
+            CollectionName::new("valid_col").unwrap(),
+        ))
         .add_collection(
             CollectionDefinition::new(CollectionName::new("bad_col").unwrap())
                 .with_schema(bad_schema),
         )
         .build();
 
-    let err = store.initialize(&manifest).expect_err("must fail due to unsupported schema dialect");
+    let err = store
+        .initialize(&manifest)
+        .expect_err("must fail due to unsupported schema dialect");
     match err {
         Error::InvalidInput { field, .. } => assert_eq!(field, "schema"),
         other => panic!("expected InvalidInput for schema dialect, got {:?}", other),
@@ -188,5 +222,8 @@ fn test_initialization_atomic_rollback_on_invalid_schema() {
 
     // Atomicity check: valid_col was NOT created because transaction rolled back
     let cols = store.collections().list().expect("list collections");
-    assert!(cols.is_empty(), "all-or-nothing: no collections should exist after rollback");
+    assert!(
+        cols.is_empty(),
+        "all-or-nothing: no collections should exist after rollback"
+    );
 }

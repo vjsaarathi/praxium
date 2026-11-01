@@ -1,15 +1,40 @@
-use std::error::Error as StdError;
 use praxium::error::{Error, ValidationIssue, ValidationReport};
+use std::error::Error as StdError;
 
 #[test]
 fn test_validation_report_deterministic_ordering() {
-    let issue_c = ValidationIssue::new("/users/0/name", "/properties/name/type", "type", Some("expected string".into()));
-    let issue_a = ValidationIssue::new("/age", "/properties/age/minimum", "minimum", Some("must be >= 0".into()));
-    let issue_b = ValidationIssue::new("/age", "/properties/age/maximum", "maximum", Some("must be <= 120".into()));
-    let issue_d = ValidationIssue::new("/users/0/name", "/properties/name/minLength", "minLength", None);
+    let issue_c = ValidationIssue::new(
+        "/users/0/name",
+        "/properties/name/type",
+        "type",
+        Some("expected string".into()),
+    );
+    let issue_a = ValidationIssue::new(
+        "/age",
+        "/properties/age/minimum",
+        "minimum",
+        Some("must be >= 0".into()),
+    );
+    let issue_b = ValidationIssue::new(
+        "/age",
+        "/properties/age/maximum",
+        "maximum",
+        Some("must be <= 120".into()),
+    );
+    let issue_d = ValidationIssue::new(
+        "/users/0/name",
+        "/properties/name/minLength",
+        "minLength",
+        None,
+    );
 
     // Pass in random order
-    let report = ValidationReport::new(vec![issue_c.clone(), issue_a.clone(), issue_b.clone(), issue_d.clone()]);
+    let report = ValidationReport::new(vec![
+        issue_c.clone(),
+        issue_a.clone(),
+        issue_b.clone(),
+        issue_d.clone(),
+    ]);
     let issues = report.issues();
 
     assert_eq!(issues.len(), 4);
@@ -27,10 +52,18 @@ fn test_validation_report_deterministic_ordering() {
 #[test]
 fn test_error_structured_fields_and_source() {
     let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "disk read only");
-    let storage_err = Error::storage("Database::open", "failed to open database file", Some(Box::new(io_err)));
+    let storage_err = Error::storage(
+        "Database::open",
+        "failed to open database file",
+        Some(Box::new(io_err)),
+    );
 
     match &storage_err {
-        Error::Storage { operation, message, source } => {
+        Error::Storage {
+            operation,
+            message,
+            source,
+        } => {
             assert_eq!(*operation, "Database::open");
             assert_eq!(message, "failed to open database file");
             assert!(source.is_some());
@@ -52,7 +85,13 @@ fn test_conflict_structured_fields() {
     };
 
     match conflict {
-        Error::Conflict { operation, entity, expected, current, message } => {
+        Error::Conflict {
+            operation,
+            entity,
+            expected,
+            current,
+            message,
+        } => {
             assert_eq!(operation, "Database::replace");
             assert_eq!(entity, "object");
             assert_eq!(expected, Some("2".into()));
@@ -70,7 +109,10 @@ fn test_unsupported_version_fields() {
         supported_version: 1,
     };
     match err {
-        Error::UnsupportedVersion { found_version, supported_version } => {
+        Error::UnsupportedVersion {
+            found_version,
+            supported_version,
+        } => {
             assert_eq!(found_version, 5);
             assert_eq!(supported_version, 1);
         }

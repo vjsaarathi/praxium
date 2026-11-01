@@ -15,7 +15,9 @@ use crate::error::Error;
 ///
 /// Collection names must be non-empty, contain no ASCII or Unicode control characters,
 /// and preserve exact text and case without implicit normalization or folding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct CollectionName(String);
 
@@ -89,7 +91,9 @@ impl From<CollectionName> for String {
 }
 
 /// Validated newtype for an object identifier strictly using UUIDv7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct ObjectId(Uuid);
 
@@ -131,7 +135,11 @@ impl FromStr for ObjectId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parsed = Uuid::parse_str(s).map_err(|e| {
-            Error::invalid_input("ObjectId::from_str", "object_id", format!("malformed UUID: {e}"))
+            Error::invalid_input(
+                "ObjectId::from_str",
+                "object_id",
+                format!("malformed UUID: {e}"),
+            )
         })?;
         Self::from_uuid(parsed)
     }
@@ -151,7 +159,9 @@ impl From<ObjectId> for String {
 }
 
 /// Monotonically increasing revision of a stored object, starting at 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ObjectRevision(NonZeroU64);
 
 impl ObjectRevision {
@@ -166,9 +176,9 @@ impl ObjectRevision {
     /// # Errors
     /// Returns [`Error::InvalidInput`] if revision is zero.
     pub fn new(val: u64) -> Result<Self, Error> {
-        NonZeroU64::new(val)
-            .map(Self)
-            .ok_or_else(|| Error::invalid_input("ObjectRevision::new", "revision", "revision must be >= 1"))
+        NonZeroU64::new(val).map(Self).ok_or_else(|| {
+            Error::invalid_input("ObjectRevision::new", "revision", "revision must be >= 1")
+        })
     }
 
     /// Returns the numerical revision value.
@@ -189,7 +199,9 @@ impl fmt::Display for ObjectRevision {
 }
 
 /// Monotonically increasing version of a collection schema, starting at 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct SchemaVersion(NonZeroU32);
 
 impl SchemaVersion {
@@ -204,9 +216,13 @@ impl SchemaVersion {
     /// # Errors
     /// Returns [`Error::InvalidInput`] if version is zero.
     pub fn new(val: u32) -> Result<Self, Error> {
-        NonZeroU32::new(val)
-            .map(Self)
-            .ok_or_else(|| Error::invalid_input("SchemaVersion::new", "schema_version", "schema version must be >= 1"))
+        NonZeroU32::new(val).map(Self).ok_or_else(|| {
+            Error::invalid_input(
+                "SchemaVersion::new",
+                "schema_version",
+                "schema version must be >= 1",
+            )
+        })
     }
 
     /// Returns the numerical version value.
@@ -227,7 +243,9 @@ impl fmt::Display for SchemaVersion {
 }
 
 /// Monotonically increasing version of a collection index, starting at 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct IndexVersion(NonZeroU32);
 
 impl IndexVersion {
@@ -242,9 +260,13 @@ impl IndexVersion {
     /// # Errors
     /// Returns [`Error::InvalidInput`] if version is zero.
     pub fn new(val: u32) -> Result<Self, Error> {
-        NonZeroU32::new(val)
-            .map(Self)
-            .ok_or_else(|| Error::invalid_input("IndexVersion::new", "index_version", "index version must be >= 1"))
+        NonZeroU32::new(val).map(Self).ok_or_else(|| {
+            Error::invalid_input(
+                "IndexVersion::new",
+                "index_version",
+                "index version must be >= 1",
+            )
+        })
     }
 
     /// Returns the numerical version value.
@@ -269,7 +291,9 @@ impl fmt::Display for IndexVersion {
 /// An empty string `""` strictly addresses the root value.
 /// Non-empty pointers must begin with a forward slash (`/`).
 /// Escape sequences must strictly be `~0` (representing `~`) or `~1` (representing `/`).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct JsonPointer(String);
 
@@ -385,3 +409,21 @@ pub struct SchemaSnapshot {
     pub created_at: SystemTime,
 }
 
+/// A generic schema-governed JSON object stored in Praxium.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StoredObject {
+    /// The collection this object belongs to.
+    pub collection: CollectionName,
+    /// The unique UUIDv7 identifier for the object.
+    pub id: ObjectId,
+    /// Monotonically increasing revision number, starting at 1.
+    pub revision: ObjectRevision,
+    /// The application-defined JSON object payload.
+    pub value: serde_json::Value,
+    /// Creation timestamp.
+    pub created_at: SystemTime,
+    /// Last update timestamp.
+    pub updated_at: SystemTime,
+    /// Optional deletion timestamp if soft-deleted.
+    pub deleted_at: Option<SystemTime>,
+}

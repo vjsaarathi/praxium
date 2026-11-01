@@ -1,9 +1,12 @@
 //! Focused operation groups exposed by the ObjectStore handle.
 
-use std::sync::Arc;
-use crate::domain::types::{CollectionMetadata, CollectionName, SchemaSnapshot, SchemaVersion};
-use crate::error::Error;
+use crate::domain::types::{
+    CollectionMetadata, CollectionName, ObjectId, ObjectRevision, SchemaSnapshot, SchemaVersion,
+    StoredObject,
+};
+use crate::error::{Error, ValidationReport};
 use crate::storage::StorageEngine;
+use std::sync::Arc;
 
 /// Operations for managing collections.
 #[derive(Clone, Debug)]
@@ -79,7 +82,11 @@ impl SchemasOp {
     /// # Errors
     /// - Returns [`Error::NotFound`] if the collection does not exist.
     /// - Returns [`Error::InvalidInput`] if the schema dialect is unsupported or invalid.
-    pub fn validate_proposed(&self, collection: &CollectionName, schema: &serde_json::Value) -> Result<(), Error> {
+    pub fn validate_proposed(
+        &self,
+        collection: &CollectionName,
+        schema: &serde_json::Value,
+    ) -> Result<(), Error> {
         if !self.storage.collection_exists(collection)? {
             return Err(Error::not_found(
                 "validate_proposed",
@@ -103,8 +110,227 @@ impl SchemasOp {
 /// Operations for reading, creating, and updating stored objects.
 #[derive(Clone, Debug)]
 pub struct ObjectsOp {
-    #[allow(dead_code)]
     pub(crate) storage: Arc<dyn StorageEngine>,
+}
+
+impl ObjectsOp {
+    fn validate_internal(
+        &self,
+        collection: &CollectionName,
+        value: &serde_json::Value,
+        operation: &'static str,
+    ) -> Result<ValidationReport, Error> {
+        if !value.is_object() {
+            return Err(Error::invalid_input(
+                operation,
+                "value",
+                "stored object root must be a JSON object",
+            ));
+        }
+
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                operation,
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        if let Some(active) = self.storage.get_active_schema(collection)? {
+            crate::domain::validation::validate_value_against_schema(&active.schema, value)
+        } else {
+            Ok(ValidationReport::default())
+        }
+    }
+
+    fn apply_update(
+        &self,
+        existing: StoredObject,
+        new_value: serde_json::Value,
+        expected_revision: ObjectRevision,
+        operation: &'static str,
+    ) -> Result<StoredObject, Error> {
+        if existing.revision != expected_revision {
+            return Err(Error::conflict(
+                operation,
+                "object",
+                Some(expected_revision.to_string()),
+                Some(existing.revision.to_string()),
+                format!(
+                    "stale object update: expected revision {}, current revision is {}",
+                    expected_revision, existing.revision
+                ),
+            ));
+        }
+
+        let report = self.validate_internal(&existing.collection, &new_value, operation)?;
+        if !report.is_valid() {
+            return Err(Error::validation(operation, report));
+        }
+
+        let next_rev = existing.revision.next();
+        let now = std::time::SystemTime::now();
+        let updated = StoredObject {
+            collection: existing.collection,
+            id: existing.id,
+            revision: next_rev,
+            value: new_value,
+            created_at: existing.created_at,
+            updated_at: now,
+            deleted_at: existing.deleted_at,
+        };
+
+        self.storage
+            .update_object(&updated, expected_revision, operation)?;
+        Ok(updated)
+    }
+
+    /// Validates a candidate object value against the collection's active schema without writing.
+    ///
+    /// # Errors
+    /// - Returns [`Error::InvalidInput`] if `value` is not a JSON object root.
+    /// - Returns [`Error::NotFound`] if the collection does not exist.
+    pub fn validate(
+        &self,
+        collection: &CollectionName,
+        value: &serde_json::Value,
+    ) -> Result<ValidationReport, Error> {
+        self.validate_internal(collection, value, "validate_object")
+    }
+
+    /// Creates a new stored object in the specified collection.
+    ///
+    /// Assigns a new UUIDv7 [`ObjectId`], initial revision 1, and creation/update timestamps.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection does not exist.
+    /// - Returns [`Error::InvalidInput`] if the root value is not a JSON object.
+    /// - Returns [`Error::Validation`] if the value violates the collection's active schema.
+    pub fn create(
+        &self,
+        collection: &CollectionName,
+        value: serde_json::Value,
+    ) -> Result<StoredObject, Error> {
+        let report = self.validate_internal(collection, &value, "create_object")?;
+        if !report.is_valid() {
+            return Err(Error::validation("create_object", report));
+        }
+
+        let now = std::time::SystemTime::now();
+        let object = StoredObject {
+            collection: collection.clone(),
+            id: ObjectId::new_v7(),
+            revision: ObjectRevision::INITIAL,
+            value,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        };
+
+        self.storage.insert_object(&object, "create_object")?;
+        Ok(object)
+    }
+
+    /// Retrieves a stored object by its collection and ID.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection does not exist.
+    pub fn get(
+        &self,
+        collection: &CollectionName,
+        id: &ObjectId,
+    ) -> Result<Option<StoredObject>, Error> {
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "get_object",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        self.storage.get_object(collection, id)
+    }
+
+    /// Fully replaces an existing stored object guarded by the expected current revision.
+    ///
+    /// Increments the revision by 1 and updates the update timestamp.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection or object does not exist.
+    /// - Returns [`Error::InvalidInput`] if the replacement root value is not a JSON object.
+    /// - Returns [`Error::Conflict`] if the current revision does not match `expected_revision`.
+    /// - Returns [`Error::Validation`] if the new value violates the collection's active schema.
+    pub fn replace(
+        &self,
+        collection: &CollectionName,
+        id: &ObjectId,
+        expected_revision: ObjectRevision,
+        value: serde_json::Value,
+    ) -> Result<StoredObject, Error> {
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "replace_object",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        let existing = self
+            .storage
+            .get_object(collection, id)?
+            .ok_or_else(|| Error::not_found("replace_object", "object", Some(id.to_string())))?;
+
+        self.apply_update(existing, value, expected_revision, "replace_object")
+    }
+
+    /// Applies an RFC 6902 JSON Patch to an existing stored object guarded by the expected revision.
+    ///
+    /// Increments the revision by 1 and updates the update timestamp.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the collection or object does not exist.
+    /// - Returns [`Error::Conflict`] if the current revision does not match `expected_revision`.
+    /// - Returns [`Error::InvalidInput`] if the patch is malformed, fails to apply, or results in a non-object.
+    /// - Returns [`Error::Validation`] if the patched value violates the collection's active schema.
+    pub fn patch(
+        &self,
+        collection: &CollectionName,
+        id: &ObjectId,
+        expected_revision: ObjectRevision,
+        patch: serde_json::Value,
+    ) -> Result<StoredObject, Error> {
+        if !self.storage.collection_exists(collection)? {
+            return Err(Error::not_found(
+                "patch_object",
+                "collection",
+                Some(collection.as_str().to_string()),
+            ));
+        }
+
+        let existing = self
+            .storage
+            .get_object(collection, id)?
+            .ok_or_else(|| Error::not_found("patch_object", "object", Some(id.to_string())))?;
+
+        let patch_ops: json_patch::Patch = serde_json::from_value(patch).map_err(|e| {
+            Error::invalid_input(
+                "patch_object",
+                "patch",
+                format!("malformed RFC 6902 JSON patch: {e}"),
+            )
+        })?;
+
+        let mut candidate_value = existing.value.clone();
+        json_patch::patch(&mut candidate_value, &patch_ops).map_err(|e| {
+            Error::invalid_input(
+                "patch_object",
+                "patch",
+                format!("failed to apply JSON patch: {e}"),
+            )
+        })?;
+
+        self.apply_update(existing, candidate_value, expected_revision, "patch_object")
+    }
 }
 
 /// Operations for generic filtering, sorting, and pagination.

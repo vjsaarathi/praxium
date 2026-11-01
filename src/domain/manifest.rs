@@ -7,10 +7,10 @@
 use serde_json::Value;
 
 use crate::domain::types::{CollectionName, IndexVersion, JsonPointer, SchemaVersion};
-use crate::error::Error;
 
-/// Draft 2020-12 canonical schema identifier.
-pub const DRAFT_2020_12_SCHEMA_URI: &str = "https://json-schema.org/draft/2020-12/schema";
+pub use crate::domain::validation::{
+    DRAFT_2020_12_SCHEMA_URI, validate_draft_2020_12_schema, validate_value_against_schema,
+};
 
 /// Client-supplied defaults for initializing collections, schemas, and indexes.
 #[derive(Debug, Clone, Default)]
@@ -130,41 +130,4 @@ pub struct InitializationReport {
     pub seeded_indexes: Vec<(CollectionName, JsonPointer, IndexVersion)>,
     /// Indexes that already existed and were preserved with their current [`IndexVersion`].
     pub preserved_indexes: Vec<(CollectionName, JsonPointer, IndexVersion)>,
-}
-
-/// Validates that a schema document is a valid Draft 2020-12 JSON Schema.
-pub fn validate_draft_2020_12_schema(schema: &Value) -> Result<(), Error> {
-    // Stored JSON schema must be an object (or boolean schema, but v1 specifies object schema declarations)
-    let schema_obj = schema.as_object().ok_or_else(|| {
-        Error::invalid_input("validate_schema", "schema", "schema document must be a JSON object")
-    })?;
-
-    // Draft 2020-12 requires declaring $schema matching Draft 2020-12
-    let schema_uri = schema_obj.get("$schema").and_then(Value::as_str);
-    match schema_uri {
-        Some(uri) if uri == DRAFT_2020_12_SCHEMA_URI || uri == format!("{DRAFT_2020_12_SCHEMA_URI}#") => {
-            // Valid Draft 2020-12 dialect URI
-        }
-        Some(other) => {
-            return Err(Error::invalid_input(
-                "validate_schema",
-                "schema",
-                format!("unsupported schema dialect '{other}'; only JSON Schema Draft 2020-12 is supported"),
-            ));
-        }
-        None => {
-            return Err(Error::invalid_input(
-                "validate_schema",
-                "schema",
-                "schema must declare '$schema': 'https://json-schema.org/draft/2020-12/schema'",
-            ));
-        }
-    }
-
-    // Verify it compiles with jsonschema Draft 2020-12 compiler
-    jsonschema::validator_for(schema).map_err(|e| {
-        Error::invalid_input("validate_schema", "schema", format!("malformed JSON Schema: {e}"))
-    })?;
-
-    Ok(())
 }

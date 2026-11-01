@@ -38,7 +38,9 @@ pub enum Error {
     },
 
     /// A conflict occurred due to mismatched revisions or versions.
-    #[error("concurrency or state conflict on '{entity}' during '{operation}': {message} (expected: {expected:?}, current: {current:?})")]
+    #[error(
+        "concurrency or state conflict on '{entity}' during '{operation}': {message} (expected: {expected:?}, current: {current:?})"
+    )]
     Conflict {
         /// The operation being performed.
         operation: &'static str,
@@ -107,7 +109,9 @@ pub enum Error {
     },
 
     /// The database storage version is newer than the highest version supported by this Praxium release.
-    #[error("unsupported database version: found {found_version}, supported up to {supported_version}")]
+    #[error(
+        "unsupported database version: found {found_version}, supported up to {supported_version}"
+    )]
     UnsupportedVersion {
         /// The storage version found in the database.
         found_version: u32,
@@ -118,7 +122,11 @@ pub enum Error {
 
 impl Error {
     /// Helper to construct an [`Error::InvalidInput`].
-    pub fn invalid_input(operation: &'static str, field: &'static str, message: impl Into<String>) -> Self {
+    pub fn invalid_input(
+        operation: &'static str,
+        field: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self::InvalidInput {
             operation,
             field,
@@ -177,6 +185,11 @@ impl Error {
             message: message.into(),
         }
     }
+
+    /// Helper to construct an [`Error::Validation`].
+    pub fn validation(operation: &'static str, report: ValidationReport) -> Self {
+        Self::Validation { operation, report }
+    }
 }
 
 /// A structured report of schema validation issues.
@@ -185,7 +198,7 @@ impl Error {
 /// 1. `instance_pointer`
 /// 2. `schema_pointer`
 /// 3. `keyword`
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub struct ValidationReport {
     issues: Vec<ValidationIssue>,
 }

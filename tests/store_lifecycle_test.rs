@@ -15,7 +15,10 @@ fn test_store_open_new_creates_without_seeding_defaults() {
 
     // Verify open alone never seeds defaults
     let collections = store.collections().list().expect("list collections");
-    assert!(collections.is_empty(), "open alone must not seed any default collections");
+    assert!(
+        collections.is_empty(),
+        "open alone must not seed any default collections"
+    );
 }
 
 #[test]
@@ -46,14 +49,18 @@ fn test_store_open_newer_unsupported_version_returns_distinct_error() {
         let conn = rusqlite::Connection::open(&db_path).expect("open raw sqlite");
         conn.execute_batch(
             "CREATE TABLE _praxium_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             INSERT INTO _praxium_metadata (key, value) VALUES ('storage_version', '999');"
-        ).expect("write metadata");
+             INSERT INTO _praxium_metadata (key, value) VALUES ('storage_version', '999');",
+        )
+        .expect("write metadata");
     }
 
     // Now try to open with SqliteStorage::open
     let res = SqliteStorage::open(&db_path);
     match res {
-        Err(Error::UnsupportedVersion { found_version, supported_version }) => {
+        Err(Error::UnsupportedVersion {
+            found_version,
+            supported_version,
+        }) => {
             assert_eq!(found_version, 999);
             assert!(supported_version < 999);
         }
@@ -62,12 +69,17 @@ fn test_store_open_newer_unsupported_version_returns_distinct_error() {
 
     // Verify raw db version was left unchanged
     let conn = rusqlite::Connection::open(&db_path).expect("open raw sqlite");
-    let val: String = conn.query_row(
-        "SELECT value FROM _praxium_metadata WHERE key = 'storage_version'",
-        [],
-        |r| r.get(0),
-    ).expect("query version");
-    assert_eq!(val, "999", "unsupported store version must remain unchanged");
+    let val: String = conn
+        .query_row(
+            "SELECT value FROM _praxium_metadata WHERE key = 'storage_version'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query version");
+    assert_eq!(
+        val, "999",
+        "unsupported store version must remain unchanged"
+    );
 }
 
 #[test]
@@ -115,9 +127,9 @@ fn test_transaction_rollback_on_error() {
     let storage = SqliteStorage::open(&db_path).expect("open");
     let store = ObjectStore::new(storage);
 
-    let res: Result<(), Error> = store.transactions().run(|| {
-        Err(Error::invalid_input("tx", "test", "simulated failure"))
-    });
+    let res: Result<(), Error> = store
+        .transactions()
+        .run(|| Err(Error::invalid_input("tx", "test", "simulated failure")));
 
     assert!(res.is_err());
 }
@@ -167,9 +179,9 @@ fn test_schema_validate_without_write() {
 
 #[test]
 fn test_store_is_backend_agnostic() {
+    use praxium::StorageEngine;
     use praxium::domain::manifest::{InitializationManifest, InitializationReport};
     use praxium::domain::types::CollectionName;
-    use praxium::StorageEngine;
 
     #[derive(Debug)]
     struct MockStorage;
@@ -179,7 +191,10 @@ fn test_store_is_backend_agnostic() {
             Ok(())
         }
 
-        fn get_collection(&self, name: &CollectionName) -> Result<Option<praxium::CollectionMetadata>, Error> {
+        fn get_collection(
+            &self,
+            name: &CollectionName,
+        ) -> Result<Option<praxium::CollectionMetadata>, Error> {
             if name.as_str() == "mock_collection" {
                 Ok(Some(praxium::CollectionMetadata {
                     name: name.clone(),
@@ -198,19 +213,57 @@ fn test_store_is_backend_agnostic() {
             Ok(vec![CollectionName::new("mock_collection").unwrap()])
         }
 
-        fn get_active_schema(&self, _col: &CollectionName) -> Result<Option<praxium::SchemaSnapshot>, Error> {
+        fn get_active_schema(
+            &self,
+            _col: &CollectionName,
+        ) -> Result<Option<praxium::SchemaSnapshot>, Error> {
             Ok(None)
         }
 
-        fn get_schema_version(&self, _col: &CollectionName, _ver: praxium::SchemaVersion) -> Result<Option<praxium::SchemaSnapshot>, Error> {
+        fn get_schema_version(
+            &self,
+            _col: &CollectionName,
+            _ver: praxium::SchemaVersion,
+        ) -> Result<Option<praxium::SchemaSnapshot>, Error> {
             Ok(None)
         }
 
-        fn list_schema_versions(&self, _col: &CollectionName) -> Result<Vec<praxium::SchemaVersion>, Error> {
+        fn list_schema_versions(
+            &self,
+            _col: &CollectionName,
+        ) -> Result<Vec<praxium::SchemaVersion>, Error> {
             Ok(vec![])
         }
 
-        fn seed_manifest(&self, _manifest: &InitializationManifest) -> Result<InitializationReport, Error> {
+        fn insert_object(
+            &self,
+            _obj: &praxium::StoredObject,
+            _op: &'static str,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn get_object(
+            &self,
+            _col: &CollectionName,
+            _id: &praxium::ObjectId,
+        ) -> Result<Option<praxium::StoredObject>, Error> {
+            Ok(None)
+        }
+
+        fn update_object(
+            &self,
+            _obj: &praxium::StoredObject,
+            _expected: praxium::ObjectRevision,
+            _op: &'static str,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn seed_manifest(
+            &self,
+            _manifest: &InitializationManifest,
+        ) -> Result<InitializationReport, Error> {
             Ok(InitializationReport::default())
         }
 
@@ -221,7 +274,10 @@ fn test_store_is_backend_agnostic() {
 
     // Pass custom backend directly to ObjectStore::new constructor
     let store = ObjectStore::new(MockStorage);
-    let cols = store.collections().list().expect("list collections from mock backend");
+    let cols = store
+        .collections()
+        .list()
+        .expect("list collections from mock backend");
     assert_eq!(cols.len(), 1);
     assert_eq!(cols[0].as_str(), "mock_collection");
 }

@@ -11,7 +11,10 @@ pub mod sqlite;
 pub use sqlite::SqliteStorage;
 
 use crate::domain::manifest::{InitializationManifest, InitializationReport};
-use crate::domain::types::{CollectionMetadata, CollectionName, SchemaSnapshot, SchemaVersion};
+use crate::domain::types::{
+    CollectionMetadata, CollectionName, ObjectId, ObjectRevision, SchemaSnapshot, SchemaVersion,
+    StoredObject,
+};
 use crate::error::Error;
 
 /// Storage port defining backend-agnostic persistence capabilities.
@@ -40,22 +43,61 @@ pub trait StorageEngine: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] if the collection does not exist.
-    fn get_active_schema(&self, collection: &CollectionName) -> Result<Option<SchemaSnapshot>, Error>;
+    fn get_active_schema(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<Option<SchemaSnapshot>, Error>;
 
     /// Retrieves a specific immutable schema version snapshot for the collection.
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] if the collection does not exist.
-    fn get_schema_version(&self, collection: &CollectionName, version: SchemaVersion) -> Result<Option<SchemaSnapshot>, Error>;
+    fn get_schema_version(
+        &self,
+        collection: &CollectionName,
+        version: SchemaVersion,
+    ) -> Result<Option<SchemaSnapshot>, Error>;
 
     /// Lists all retained schema versions for the collection in ascending order.
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] if the collection does not exist.
-    fn list_schema_versions(&self, collection: &CollectionName) -> Result<Vec<SchemaVersion>, Error>;
+    fn list_schema_versions(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<Vec<SchemaVersion>, Error>;
+
+    /// Persists a newly created stored object.
+    ///
+    /// # Errors
+    /// Returns [`Error::Conflict`] if an object with the same ID already exists.
+    fn insert_object(&self, object: &StoredObject, operation: &'static str) -> Result<(), Error>;
+
+    /// Retrieves a stored object by its collection and ID.
+    /// Returns `Ok(None)` if the object does not exist.
+    fn get_object(
+        &self,
+        collection: &CollectionName,
+        id: &ObjectId,
+    ) -> Result<Option<StoredObject>, Error>;
+
+    /// Updates an existing stored object guarded by the expected current revision.
+    ///
+    /// # Errors
+    /// - Returns [`Error::NotFound`] if the object does not exist.
+    /// - Returns [`Error::Conflict`] if the current revision does not match `expected_revision`.
+    fn update_object(
+        &self,
+        object: &StoredObject,
+        expected_revision: ObjectRevision,
+        operation: &'static str,
+    ) -> Result<(), Error>;
 
     /// Atomically seeds missing collections, schemas, and indexes from the manifest.
-    fn seed_manifest(&self, manifest: &InitializationManifest) -> Result<InitializationReport, Error>;
+    fn seed_manifest(
+        &self,
+        manifest: &InitializationManifest,
+    ) -> Result<InitializationReport, Error>;
 
     /// Runs a transactional unit of work atomically.
     ///

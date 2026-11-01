@@ -1,8 +1,8 @@
-use std::str::FromStr;
+use praxium::Error;
 use praxium::domain::types::{
     CollectionName, IndexVersion, JsonPointer, ObjectId, ObjectRevision, SchemaVersion,
 };
-use praxium::Error;
+use std::str::FromStr;
 
 #[test]
 fn test_collection_name_valid() {

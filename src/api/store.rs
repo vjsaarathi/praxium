@@ -6,7 +6,7 @@ use crate::api::operation_groups::{
     CollectionsOp, HistoryOp, ObjectsOp, QueryOp, SchemasOp, TransactionsOp,
 };
 use crate::domain::manifest::{
-    validate_draft_2020_12_schema, InitializationManifest, InitializationReport,
+    InitializationManifest, InitializationReport, validate_draft_2020_12_schema,
 };
 use crate::error::Error;
 use crate::storage::StorageEngine;
@@ -71,7 +71,10 @@ impl ObjectStore {
     /// - Returns [`Error::Storage`] if an underlying storage error occurs.
     ///
     /// In the event of any error, the initialization is rolled back completely (all-or-nothing).
-    pub fn initialize(&self, manifest: &InitializationManifest) -> Result<InitializationReport, Error> {
+    pub fn initialize(
+        &self,
+        manifest: &InitializationManifest,
+    ) -> Result<InitializationReport, Error> {
         // 1. Domain pre-validation (Draft 2020-12 schema validation)
         for col in manifest.collections() {
             if let Some(schema) = col.schema() {
