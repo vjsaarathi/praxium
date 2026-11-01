@@ -1,0 +1,41 @@
+# Rust / Cargo build outputs
+/target/
+**/*.rs.bk
+
+# Local AI & Agent tooling configuration / state
+.codex/
+.agents/
+.gemini/
+.claude/
+
+# Cloud credentials, local secrets & environment files
+.aws/
+.env
+.env.*
+*.pem
+*.key
+
+# Local database files & runtime SQLite journals
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# IDE & Editor configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Other tooling artifacts
+node_modules/
+gen/
+tmp/
+temp/
