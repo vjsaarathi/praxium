@@ -340,21 +340,23 @@ pub struct QueryOp {
 }
 
 impl QueryOp {
-    /// Executes a filter query against a collection, returning all matching Stored Objects.
-    ///
-    /// # Errors
-    /// - Returns [`Error::NotFound`] if the collection does not exist.
-    /// - Returns [`Error::Query`] if a regex pattern is invalid (validated pre-evaluation)
-    ///   or if an incompatible stored value type is encountered during evaluation.
-    pub fn execute(
+    /// Executes a deterministically sorted, paginated query. `limit` must be positive.
+    pub fn execute_page(
         &self,
         collection: &CollectionName,
         filter: &crate::domain::query::Filter,
-    ) -> Result<Vec<StoredObject>, Error> {
-        // Pre-evaluation validation (e.g. invalid regex rejection and operand check)
+        sort: &[crate::domain::query::SortKey],
+        limit: usize,
+        offset: usize,
+    ) -> Result<crate::domain::query::QueryResult, Error> {
+        if limit == 0 {
+            return Err(Error::invalid_input(
+                "execute_query",
+                "limit",
+                "limit must be positive",
+            ));
+        }
         filter.validate(Some(collection))?;
-
-        // Ensure collection exists
         if !self.storage.collection_exists(collection)? {
             return Err(Error::not_found(
                 "execute_query",
@@ -362,17 +364,41 @@ impl QueryOp {
                 Some(collection.as_str().to_string()),
             ));
         }
-
-        let objects = self.storage.get_all_objects(collection)?;
-        let mut matches = Vec::new();
-
-        for object in objects {
-            if filter.matches(collection, &object)? {
-                matches.push(object);
+        let mut matches = self
+            .storage
+            .get_all_objects(collection)?
+            .into_iter()
+            .filter_map(|o| match filter.matches(collection, &o) {
+                Ok(true) => Some(Ok(o)),
+                Ok(false) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        matches.sort_by(|a, b| {
+            for key in sort {
+                let av = a.value.pointer(key.pointer.as_str());
+                let bv = b.value.pointer(key.pointer.as_str());
+                let mut ord = match (av, bv) {
+                    (None, None) => std::cmp::Ordering::Equal,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (Some(a), Some(b)) => crate::domain::query::json_sort_cmp(a, b),
+                };
+                if key.direction == crate::domain::query::SortDirection::Descending {
+                    ord = ord.reverse();
+                }
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
             }
-        }
-
-        Ok(matches)
+            a.id.cmp(&b.id)
+        });
+        let total_count = matches.len();
+        let objects = matches.into_iter().skip(offset).take(limit).collect();
+        Ok(crate::domain::query::QueryResult {
+            objects,
+            total_count,
+        })
     }
 }
 

@@ -4,6 +4,89 @@ use crate::domain::types::{CollectionName, JsonPointer, StoredObject};
 use crate::error::Error;
 use std::cmp::Ordering;
 
+/// Direction used to order a JSON pointer's value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+/// One priority-ordered JSON pointer sort key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SortKey {
+    pub pointer: JsonPointer,
+    pub direction: SortDirection,
+}
+
+impl SortKey {
+    pub fn ascending(pointer: JsonPointer) -> Self {
+        Self {
+            pointer,
+            direction: SortDirection::Ascending,
+        }
+    }
+    pub fn descending(pointer: JsonPointer) -> Self {
+        Self {
+            pointer,
+            direction: SortDirection::Descending,
+        }
+    }
+}
+
+/// A query page and the total number of matching objects before pagination.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryResult {
+    pub objects: Vec<StoredObject>,
+    pub total_count: usize,
+}
+
+/// Compares JSON values according to the portable total order (missing is handled by caller).
+pub fn json_sort_cmp(a: &serde_json::Value, b: &serde_json::Value) -> Ordering {
+    use serde_json::Value::*;
+    let rank = |v: &serde_json::Value| match v {
+        Null => 0,
+        Bool(_) => 1,
+        Number(_) => 2,
+        String(_) => 3,
+        Array(_) => 4,
+        Object(_) => 5,
+    };
+    let types = rank(a).cmp(&rank(b));
+    if types != Ordering::Equal {
+        return types;
+    }
+    match (a, b) {
+        (Null, Null) => Ordering::Equal,
+        (Bool(a), Bool(b)) => a.cmp(b),
+        (Number(a), Number(b)) => number_cmp(a, b),
+        (String(a), String(b)) => a.chars().cmp(b.chars()),
+        (Array(a), Array(b)) => a
+            .iter()
+            .map(|x| x)
+            .zip(b.iter())
+            .map(|(x, y)| json_sort_cmp(x, y))
+            .find(|o| *o != Ordering::Equal)
+            .unwrap_or_else(|| a.len().cmp(&b.len())),
+        (Object(a), Object(b)) => {
+            let mut a_entries: Vec<_> = a.iter().collect();
+            let mut b_entries: Vec<_> = b.iter().collect();
+            a_entries.sort_unstable_by(|(ka, _), (kb, _)| ka.chars().cmp(kb.chars()));
+            b_entries.sort_unstable_by(|(ka, _), (kb, _)| ka.chars().cmp(kb.chars()));
+            a_entries
+                .iter()
+                .zip(b_entries.iter())
+                .map(|((ka, va), (kb, vb))| {
+                    ka.chars()
+                        .cmp(kb.chars())
+                        .then_with(|| json_sort_cmp(va, vb))
+                })
+                .find(|o| *o != Ordering::Equal)
+                .unwrap_or_else(|| a_entries.len().cmp(&b_entries.len()))
+        }
+        _ => Ordering::Equal,
+    }
+}
+
 /// A portable, typed query filter AST.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Filter {

@@ -1,8 +1,29 @@
 use praxium::domain::types::{CollectionName, JsonPointer};
 use praxium::storage::sqlite::SqliteStorage;
-use praxium::{Error, Filter, ObjectStore};
+use praxium::{Error, Filter, ObjectStore, SortDirection, SortKey};
 use serde_json::json;
 use tempfile::tempdir;
+
+// Keep existing filter-focused tests concise while exercising the public paginated API.
+trait ExecuteAllForTest {
+    fn execute(
+        &self,
+        collection: &CollectionName,
+        filter: &Filter,
+    ) -> Result<Vec<praxium::StoredObject>, Error>;
+}
+
+impl ExecuteAllForTest for praxium::api::operation_groups::QueryOp {
+    fn execute(
+        &self,
+        collection: &CollectionName,
+        filter: &Filter,
+    ) -> Result<Vec<praxium::StoredObject>, Error> {
+        Ok(self
+            .execute_page(collection, filter, &[], usize::MAX, 0)?
+            .objects)
+    }
+}
 
 fn setup_test_store() -> (ObjectStore, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
@@ -10,6 +31,196 @@ fn setup_test_store() -> (ObjectStore, tempfile::TempDir) {
     let storage = SqliteStorage::open(&db_path).expect("open sqlite");
     let store = ObjectStore::new(storage);
     (store, dir)
+}
+
+#[test]
+fn query_page_sorts_missing_and_values_and_reports_total() {
+    let (store, _dir) = setup_test_store();
+    let col = CollectionName::new("page").unwrap();
+    store.collections().create(&col).unwrap();
+    let missing = store.objects().create(&col, json!({"x": 0})).unwrap();
+    let null = store.objects().create(&col, json!({"v": null})).unwrap();
+    let _boolean = store.objects().create(&col, json!({"v": false})).unwrap();
+    let key = SortKey::ascending(JsonPointer::new("/v").unwrap());
+    let page = store
+        .query()
+        .execute_page(&col, &Filter::and([]), &[key], 2, 0)
+        .unwrap();
+    assert_eq!(page.total_count, 3);
+    assert_eq!(
+        page.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![missing.id, null.id]
+    );
+    let next = store
+        .query()
+        .execute_page(&col, &Filter::and([]), &[], 2, 1)
+        .unwrap();
+    assert_eq!(next.objects.len(), 2);
+    assert_eq!(next.total_count, 3);
+    assert!(matches!(
+        store
+            .query()
+            .execute_page(&col, &Filter::and([]), &[], 0, 0),
+        Err(Error::InvalidInput {
+            operation: "execute_query",
+            field: "limit",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn query_sort_orders_every_json_type_and_descending_reverses_missing_placement() {
+    let (store, _dir) = setup_test_store();
+    let col = CollectionName::new("all-json-types").unwrap();
+    store.collections().create(&col).unwrap();
+    let values = [
+        json!({}),
+        json!({"v": null}),
+        json!({"v": false}),
+        json!({"v": true}),
+        json!({"v": 2}),
+        json!({"v": "a"}),
+        json!({"v": [1]}),
+        json!({"v": {"a": 1}}),
+    ];
+    let ids: Vec<_> = values
+        .iter()
+        .map(|value| store.objects().create(&col, value.clone()).unwrap().id)
+        .collect();
+    let pointer = JsonPointer::new("/v").unwrap();
+    let ascending = store
+        .query()
+        .execute_page(
+            &col,
+            &Filter::and([]),
+            &[SortKey::ascending(pointer.clone())],
+            20,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        ascending.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        ids
+    );
+    let descending = store
+        .query()
+        .execute_page(
+            &col,
+            &Filter::and([]),
+            &[SortKey::descending(pointer)],
+            20,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        descending.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![
+            ids[7], ids[6], ids[5], ids[4], ids[3], ids[2], ids[1], ids[0]
+        ]
+    );
+}
+
+#[test]
+fn query_sort_uses_priority_per_key_direction_and_ascending_uuid_ties() {
+    let (store, _dir) = setup_test_store();
+    let col = CollectionName::new("multi-sort").unwrap();
+    store.collections().create(&col).unwrap();
+    let first = store
+        .objects()
+        .create(&col, json!({"group": 1, "rank": 1}))
+        .unwrap();
+    let second = store
+        .objects()
+        .create(&col, json!({"group": 1, "rank": 1}))
+        .unwrap();
+    let third = store
+        .objects()
+        .create(&col, json!({"group": 1, "rank": 2}))
+        .unwrap();
+    let fourth = store
+        .objects()
+        .create(&col, json!({"group": 2, "rank": 9}))
+        .unwrap();
+    let keys = [
+        SortKey::ascending(JsonPointer::new("/group").unwrap()),
+        SortKey {
+            pointer: JsonPointer::new("/rank").unwrap(),
+            direction: SortDirection::Descending,
+        },
+    ];
+    let page = store
+        .query()
+        .execute_page(&col, &Filter::and([]), &keys, 10, 0)
+        .unwrap();
+    assert_eq!(
+        page.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![third.id, first.id, second.id, fourth.id]
+    );
+}
+
+#[test]
+fn query_sort_recurses_through_arrays_and_compares_objects_by_sorted_keys() {
+    let (store, _dir) = setup_test_store();
+    let col = CollectionName::new("recursive-sort").unwrap();
+    store.collections().create(&col).unwrap();
+    let later_array = store
+        .objects()
+        .create(&col, json!({"v": [1, [false]]}))
+        .unwrap();
+    let earlier_array = store
+        .objects()
+        .create(&col, json!({"v": [1, [null]]}))
+        .unwrap();
+    let later_object = store
+        .objects()
+        .create(&col, json!({"v": {"b": 0, "a": 2}}))
+        .unwrap();
+    let earlier_object = store
+        .objects()
+        .create(&col, json!({"v": {"a": 1, "z": 0}}))
+        .unwrap();
+    let page = store
+        .query()
+        .execute_page(
+            &col,
+            &Filter::and([]),
+            &[SortKey::ascending(JsonPointer::new("/v").unwrap())],
+            10,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        page.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![
+            earlier_array.id,
+            later_array.id,
+            earlier_object.id,
+            later_object.id
+        ]
+    );
+}
+
+#[test]
+fn query_without_sort_uses_ascending_uuid_order() {
+    let (store, _dir) = setup_test_store();
+    let col = CollectionName::new("uuid-default-sort").unwrap();
+    store.collections().create(&col).unwrap();
+    let inserted = [
+        store.objects().create(&col, json!({"n": 3})).unwrap(),
+        store.objects().create(&col, json!({"n": 1})).unwrap(),
+        store.objects().create(&col, json!({"n": 2})).unwrap(),
+    ];
+    let page = store
+        .query()
+        .execute_page(&col, &Filter::and([]), &[], 10, 0)
+        .unwrap();
+    let mut expected: Vec<_> = inserted.iter().map(|o| o.id).collect();
+    expected.sort();
+    assert_eq!(
+        page.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+        expected
+    );
 }
 
 #[test]

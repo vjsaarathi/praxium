@@ -17,7 +17,7 @@ pub use api::{ObjectStore, Store};
 pub use domain::manifest::{
     CollectionDefinition, IndexDefinition, InitializationManifest, InitializationReport,
 };
-pub use domain::query::{Filter, Predicate};
+pub use domain::query::{Filter, Predicate, QueryResult, SortDirection, SortKey};
 pub use domain::types::{
     CollectionMetadata, CollectionName, IndexVersion, JsonPointer, ObjectId, ObjectRevision,
     SchemaSnapshot, SchemaVersion, StoredObject,
